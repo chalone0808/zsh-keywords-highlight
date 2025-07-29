@@ -190,6 +190,114 @@ zkh_enable_global() {
     done
 }
 
+# Function to enable automatic highlighting for ALL commands using preexec hook
+zkh_enable_auto() {
+    echo "Enabling automatic keyword highlighting for all commands..."
+    echo "Note: This will highlight output from every command you run"
+    
+    # Save original preexec if it exists
+    if [[ -n "$preexec_functions" ]]; then
+        ZKH_ORIG_PREEXEC_FUNCTIONS=("${preexec_functions[@]}")
+    fi
+    
+    # Define our preexec function
+    zkh_preexec() {
+        # Store the command being executed
+        ZKH_CURRENT_COMMAND="$1"
+    }
+    
+    # Define our precmd function to capture output
+    zkh_precmd() {
+        # This runs after each command completes
+        unset ZKH_CURRENT_COMMAND
+    }
+    
+    # Add our functions to the hook arrays
+    autoload -U add-zsh-hook
+    add-zsh-hook preexec zkh_preexec
+    add-zsh-hook precmd zkh_precmd
+    
+    # Set up command execution wrapper using exec
+    zkh_exec_wrapper() {
+        local cmd="$1"
+        shift
+        
+        # Run the command and pipe through our highlighter
+        command "$cmd" "$@" 2>&1 | zkh_highlight_stream
+    }
+    
+    echo "Automatic highlighting enabled. Use 'zkh_disable_auto' to disable."
+}
+
+# Function to enable highlighting using exec redirection (most comprehensive)
+zkh_enable_exec() {
+    echo "Enabling exec-based keyword highlighting..."
+    echo "This will highlight ALL command output automatically."
+    
+    # Create named pipes for stdout and stderr
+    ZKH_STDOUT_PIPE=$(mktemp -u)
+    ZKH_STDERR_PIPE=$(mktemp -u)
+    
+    mkfifo "$ZKH_STDOUT_PIPE" "$ZKH_STDERR_PIPE"
+    
+    # Background processes to handle the pipes
+    zkh_highlight_stream < "$ZKH_STDOUT_PIPE" &
+    ZKH_STDOUT_PID=$!
+    
+    zkh_highlight_stream < "$ZKH_STDERR_PIPE" >&2 &
+    ZKH_STDERR_PID=$!
+    
+    # Redirect stdout and stderr to our pipes
+    exec 3>&1 4>&2  # Save original stdout/stderr
+    exec 1>"$ZKH_STDOUT_PIPE" 2>"$ZKH_STDERR_PIPE"
+    
+    ZKH_EXEC_ENABLED=1
+    echo "Exec-based highlighting enabled. Use 'zkh_disable_exec' to disable."
+}
+
+# Function to disable exec-based highlighting
+zkh_disable_exec() {
+    if [[ "$ZKH_EXEC_ENABLED" == "1" ]]; then
+        echo "Disabling exec-based keyword highlighting..."
+        
+        # Restore original stdout/stderr
+        exec 1>&3 2>&4
+        exec 3>&- 4>&-
+        
+        # Kill background processes
+        [[ -n "$ZKH_STDOUT_PID" ]] && kill "$ZKH_STDOUT_PID" 2>/dev/null
+        [[ -n "$ZKH_STDERR_PID" ]] && kill "$ZKH_STDERR_PID" 2>/dev/null
+        
+        # Clean up pipes
+        [[ -p "$ZKH_STDOUT_PIPE" ]] && rm -f "$ZKH_STDOUT_PIPE"
+        [[ -p "$ZKH_STDERR_PIPE" ]] && rm -f "$ZKH_STDERR_PIPE"
+        
+        unset ZKH_EXEC_ENABLED ZKH_STDOUT_PID ZKH_STDERR_PID ZKH_STDOUT_PIPE ZKH_STDERR_PIPE
+        echo "Exec-based highlighting disabled."
+    else
+        echo "Exec-based highlighting is not currently enabled."
+    fi
+}
+
+# Function to disable automatic highlighting
+zkh_disable_auto() {
+    echo "Disabling automatic keyword highlighting..."
+    
+    # Remove our hook functions
+    if command -v add-zsh-hook >/dev/null; then
+        add-zsh-hook -d preexec zkh_preexec
+        add-zsh-hook -d precmd zkh_precmd
+    fi
+    
+    # Restore original preexec functions if they existed
+    if [[ -n "$ZKH_ORIG_PREEXEC_FUNCTIONS" ]]; then
+        preexec_functions=("${ZKH_ORIG_PREEXEC_FUNCTIONS[@]}")
+        unset ZKH_ORIG_PREEXEC_FUNCTIONS
+    fi
+    
+    echo "Automatic highlighting disabled."
+}
+
 # Function to disable global highlighting
 zkh_disable_global() {
     echo "Disabling global keyword highlighting..."
@@ -242,7 +350,16 @@ USAGE:
     zkh_test                    Test the highlighting functionality
     zkh_enable_global           Enable highlighting for common commands (experimental)
     zkh_disable_global          Disable global highlighting
+    zkh_enable_auto             Enable automatic highlighting for ALL commands (zsh hooks)
+    zkh_disable_auto            Disable automatic highlighting
+    zkh_enable_exec             Enable exec-based highlighting (most comprehensive)
+    zkh_disable_exec            Disable exec-based highlighting
     zkh_help                    Show this help message
+
+AUTOMATIC HIGHLIGHTING OPTIONS:
+    1. zkh_enable_global   - Wraps common commands (ls, cat, grep, etc.)
+    2. zkh_enable_auto     - Uses zsh hooks to highlight all commands
+    3. zkh_enable_exec     - Redirects stdout/stderr for universal highlighting
 
 EXAMPLES:
     zkh_run make                # Run make with highlighted output
